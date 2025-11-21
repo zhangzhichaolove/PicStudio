@@ -128,6 +128,9 @@ export default function App() {
           const { clientWidth, clientHeight } = containerRef.current;
           const { naturalWidth, naturalHeight } = img;
           
+          // Ensure we have dimension to work with (fix for mobile where height might be 0 initially)
+          if (clientWidth === 0 || clientHeight === 0) return;
+
           const padding = 40;
           const availableWidth = Math.max(100, clientWidth - padding);
           const availableHeight = Math.max(100, clientHeight - padding);
@@ -310,14 +313,9 @@ export default function App() {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    // Calculate the point on the image (content coordinate system) that is currently under the mouse
-    // Formula: mouse = translation + point * scale
-    // Therefore: point = (mouse - translation) / scale
     const contentX = (mouseX - viewTransform.x) / currentScale;
     const contentY = (mouseY - viewTransform.y) / currentScale;
 
-    // Calculate new translation such that the content point remains under the mouse at the new scale
-    // newTranslation = mouse - point * newScale
     const newX = mouseX - (contentX * newScale);
     const newY = mouseY - (contentY * newScale);
 
@@ -328,14 +326,18 @@ export default function App() {
     });
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const startDrag = (clientX: number, clientY: number) => {
     if (!processedImage && !intermediateImage) return;
-    // If interacting with Crop Overlay handles, don't pan (handled by stopPropagation in overlay)
-    
-    e.preventDefault(); 
     setIsDragging(true);
-    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    dragStartRef.current = { x: clientX, y: clientY };
     viewStartRef.current = { x: viewTransform.x, y: viewTransform.y };
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // If interacting with Crop Overlay handles (which stop propagation), this won't fire.
+    // But we need to prevent default to avoid text selection etc.
+    e.preventDefault(); 
+    startDrag(e.clientX, e.clientY);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -354,9 +356,38 @@ export default function App() {
     setIsDragging(false);
   };
 
+  // Touch Handlers for Mobile Panning
+  const handleTouchStart = (e: React.TouchEvent) => {
+    // If 2 fingers, it's a pinch gesture (browser handled usually, or custom). 
+    // For now, 1 finger pan.
+    if (e.touches.length === 1) {
+      startDrag(e.touches[0].clientX, e.touches[0].clientY);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isDragging || e.touches.length !== 1) return;
+    // Prevent scroll while panning
+    // Note: e.preventDefault() inside passive event listener (default in React 18+) might warn, 
+    // but we need it to stop page scrolling.
+    
+    const dx = e.touches[0].clientX - dragStartRef.current.x;
+    const dy = e.touches[0].clientY - dragStartRef.current.y;
+    
+    setViewTransform(prev => ({
+      ...prev,
+      x: viewStartRef.current.x + dx,
+      y: viewStartRef.current.y + dy
+    }));
+  };
+
+  const handleTouchEnd = () => {
+    setIsDragging(false);
+  };
+
+
   const zoomIn = () => {
       if (!containerRef.current) return;
-      // Zoom into center
       const rect = containerRef.current.getBoundingClientRect();
       const centerX = rect.width / 2;
       const centerY = rect.height / 2;
@@ -396,56 +427,61 @@ export default function App() {
 
   return (
     <div 
-        className="min-h-screen bg-dark text-gray-200 flex flex-col h-screen"
+        className="min-h-screen bg-dark text-gray-200 flex flex-col h-screen overflow-hidden"
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
     >
       {/* Header */}
-      <header className="bg-surface border-b border-gray-700 px-6 py-4 flex justify-between items-center shrink-0 z-10 shadow-md">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+      <header className="bg-surface border-b border-gray-700 px-4 py-2 md:px-6 md:py-4 flex justify-between items-center shrink-0 z-10 shadow-md">
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">
             <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-white">{t.appTitle}</h1>
+          <h1 className="text-lg md:text-xl font-bold tracking-tight text-white hidden sm:block">{t.appTitle}</h1>
         </div>
         
-        <div className="flex gap-4 items-center">
-           <div className="bg-gray-800 rounded flex overflow-hidden border border-gray-600 mr-2">
+        <div className="flex gap-2 md:gap-4 items-center">
+           <div className="bg-gray-800 rounded flex overflow-hidden border border-gray-600 shrink-0">
              <button 
                onClick={() => setLang('en')} 
-               className={`px-2 py-1 text-xs font-bold ${lang === 'en' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+               className={`px-2 py-1.5 text-[10px] md:text-xs font-bold ${lang === 'en' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
              >
                EN
              </button>
              <button 
                onClick={() => setLang('zh')} 
-               className={`px-2 py-1 text-xs font-bold ${lang === 'zh' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+               className={`px-2 py-1.5 text-[10px] md:text-xs font-bold ${lang === 'zh' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
              >
                中
              </button>
            </div>
 
-           <label className="cursor-pointer bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded transition-colors border border-gray-600 text-sm font-medium">
+           <label className="cursor-pointer bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 md:px-4 md:py-2 rounded transition-colors border border-gray-600 text-xs md:text-sm font-medium whitespace-nowrap">
              {t.upload}
              <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
            </label>
            {processedImage && (
              <button 
                onClick={downloadImage}
-               className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded transition-colors shadow-lg shadow-blue-900/50 text-sm font-bold flex items-center gap-2"
+               className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 md:px-4 md:py-2 rounded transition-colors shadow-lg shadow-blue-900/50 text-xs md:text-sm font-bold flex items-center gap-2 whitespace-nowrap"
              >
-               {t.download} <span className="opacity-70 font-normal text-xs">({formatFileSize(processedSize)})</span>
+               <span className="hidden xs:inline">{t.download}</span>
+               <span className="xs:hidden">SAVE</span>
+               <span className="opacity-70 font-normal text-[10px] hidden md:inline">({formatFileSize(processedSize)})</span>
              </button>
            )}
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1 overflow-hidden relative flex flex-col md:flex-row">
+      {/* Main Content 
+          flex-col-reverse ensures that on Mobile (column), the Sidebar (first child in DOM) is at the bottom,
+          and the Preview (second child in DOM) is at the top.
+      */}
+      <main className="flex-1 overflow-hidden relative flex flex-col-reverse md:flex-row">
         {!originalImage ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 space-y-4 bg-dark/50 backdrop-blur-sm">
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 space-y-4 bg-dark/50 backdrop-blur-sm z-50">
              <div className="w-24 h-24 border-4 border-dashed border-gray-700 rounded-2xl flex items-center justify-center mb-2">
                 <svg className="w-10 h-10 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
@@ -456,8 +492,11 @@ export default function App() {
           </div>
         ) : (
           <>
-            {/* Left Sidebar: Controls */}
-            <div className="w-full md:w-80 lg:w-96 bg-surface/50 border-r border-gray-700 flex flex-col overflow-hidden shrink-0 z-20">
+            {/* Sidebar: Controls 
+                On Mobile: Height constrained (40vh or 45vh) so it doesn't take full screen.
+                On Desktop: Width constrained, Height auto.
+            */}
+            <div className="w-full md:w-80 lg:w-96 h-[40vh] md:h-auto bg-surface/50 border-t md:border-t-0 md:border-r border-gray-700 flex flex-col overflow-hidden shrink-0 z-20">
                <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
                   <ControlPanel 
                     config={config} 
@@ -484,15 +523,20 @@ export default function App() {
                </div>
             </div>
 
-            {/* Center: Preview Stage */}
+            {/* Center: Preview Stage 
+                min-h-0 is crucial for flex children to shrink correctly.
+            */}
             <div 
                 ref={containerRef}
-                className="flex-1 bg-black/40 relative overflow-hidden flex items-center justify-center p-0"
+                className="flex-1 bg-black/40 relative overflow-hidden flex items-center justify-center p-0 min-h-0"
                 onWheel={handleWheel}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
                 style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
             >
               
@@ -562,8 +606,8 @@ export default function App() {
               
               {/* Overlay instructions for crop mode */}
               {isCropping && (
-                  <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none z-40 animate-pulse">
-                      {t.crop} Mode Active - Adjust Box
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none z-40 animate-pulse whitespace-nowrap">
+                      {t.crop} Mode Active
                   </div>
               )}
 
@@ -572,7 +616,7 @@ export default function App() {
                   <button onClick={zoomOut} className="p-2 hover:bg-gray-700 rounded-full text-gray-300 hover:text-white transition-colors">
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" /></svg>
                   </button>
-                  <span className="text-xs font-medium text-gray-300 w-12 text-center select-none">
+                  <span className="text-xs font-medium text-gray-300 w-10 text-center select-none">
                       {Math.round(viewTransform.scale * 100)}%
                   </span>
                   <button onClick={zoomIn} className="p-2 hover:bg-gray-700 rounded-full text-gray-300 hover:text-white transition-colors">

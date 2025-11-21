@@ -27,6 +27,7 @@ const CropOverlay: React.FC<CropOverlayProps> = ({
   const toImageDelta = (val: number) => val / viewTransform.scale;
 
   // Handle Style: Apply inverse scale so handles stay same size visually regardless of zoom
+  // Increase touch target for mobile
   const handleStyle = (top: boolean, left: boolean): React.CSSProperties => {
     const inverseScale = 1 / viewTransform.scale;
     const offset = -(HANDLE_SIZE * inverseScale) / 2; // Center the handle
@@ -44,29 +45,43 @@ const CropOverlay: React.FC<CropOverlayProps> = ({
       cursor: top ? (left ? 'nw-resize' : 'ne-resize') : (left ? 'sw-resize' : 'se-resize'),
       zIndex: 20,
       pointerEvents: 'auto',
-      boxShadow: `0 0 ${4 * inverseScale}px rgba(0,0,0,0.3)`
+      boxShadow: `0 0 ${4 * inverseScale}px rgba(0,0,0,0.3)`,
+      touchAction: 'none' // Prevent browser scrolling/zooming while interacting
+    };
+  };
+
+  const handleStart = (clientX: number, clientY: number, type: 'move' | 'nw' | 'ne' | 'sw' | 'se') => {
+    setIsDragging(true);
+    setDragType(type);
+    dragStartRef.current = {
+      x: clientX,
+      y: clientY,
+      rect: { ...rect }
     };
   };
 
   const handleMouseDown = (e: React.MouseEvent, type: 'move' | 'nw' | 'ne' | 'sw' | 'se') => {
     e.stopPropagation();
     e.preventDefault();
-    setIsDragging(true);
-    setDragType(type);
-    dragStartRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      rect: { ...rect }
-    };
+    handleStart(e.clientX, e.clientY, type);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent, type: 'move' | 'nw' | 'ne' | 'sw' | 'se') => {
+    e.stopPropagation();
+    // Prevent default to stop scroll
+    // e.preventDefault(); // Warning: might be ignored if passive, but usually safer to rely on touch-action: none in CSS
+    if (e.touches.length === 1) {
+        handleStart(e.touches[0].clientX, e.touches[0].clientY, type);
+    }
   };
 
   useEffect(() => {
-    const handleWindowMove = (e: MouseEvent) => {
+    const handleMove = (clientX: number, clientY: number) => {
       if (!isDragging || !dragStartRef.current) return;
 
       // Calculate delta in Image Coordinates
-      const deltaX = toImageDelta(e.clientX - dragStartRef.current.x);
-      const deltaY = toImageDelta(e.clientY - dragStartRef.current.y);
+      const deltaX = toImageDelta(clientX - dragStartRef.current.x);
+      const deltaY = toImageDelta(clientY - dragStartRef.current.y);
       const startRect = dragStartRef.current.rect;
       
       let newRect = { ...startRect };
@@ -98,8 +113,6 @@ const CropOverlay: React.FC<CropOverlayProps> = ({
            let w = newRight - newLeft;
            let h = newBottom - newTop;
            
-           // Adjust height based on width for simplicity, or vice versa depending on handle
-           // Here we drive by the dominant direction or just Width for simplicity
            if (dragType === 'se' || dragType === 'ne' || dragType === 'sw' || dragType === 'nw') {
              // Use width to determine height
              h = w / aspectRatio;
@@ -130,38 +143,48 @@ const CropOverlay: React.FC<CropOverlayProps> = ({
       onChange(newRect);
     };
 
-    const handleWindowUp = () => {
+    const handleWindowMouseMove = (e: MouseEvent) => handleMove(e.clientX, e.clientY);
+    const handleWindowTouchMove = (e: TouchEvent) => {
+        if (e.touches.length === 1) {
+            // Prevent page scrolling while dragging crop handles
+            e.preventDefault(); 
+            handleMove(e.touches[0].clientX, e.touches[0].clientY);
+        }
+    };
+
+    const handleEnd = () => {
       setIsDragging(false);
       setDragType(null);
     };
 
     if (isDragging) {
-      window.addEventListener('mousemove', handleWindowMove);
-      window.addEventListener('mouseup', handleWindowUp);
+      window.addEventListener('mousemove', handleWindowMouseMove);
+      window.addEventListener('mouseup', handleEnd);
+      // Add non-passive listener for touchmove to allow preventDefault
+      window.addEventListener('touchmove', handleWindowTouchMove, { passive: false });
+      window.addEventListener('touchend', handleEnd);
     }
     return () => {
-      window.removeEventListener('mousemove', handleWindowMove);
-      window.removeEventListener('mouseup', handleWindowUp);
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleWindowTouchMove);
+      window.removeEventListener('touchend', handleEnd);
     };
   }, [isDragging, dragType, imageDimensions, viewTransform, aspectRatio, onChange]);
 
   // Position the Overlay div using Image Coordinates
-  // Since this component is rendered INSIDE the transformed container in App.tsx,
-  // we just use the rect coordinates directly.
   const boxStyle: React.CSSProperties = {
     position: 'absolute',
     left: rect.x,
     top: rect.y,
     width: rect.width,
     height: rect.height,
-    // Huge shadow acts as the dimming overlay. 
-    // Using vmin guarantees it covers the screen even if zoomed out, though 9999px usually works too.
     boxShadow: '0 0 0 50000px rgba(0, 0, 0, 0.6)', 
     border: `${1 / viewTransform.scale}px solid rgba(255, 255, 255, 0.8)`,
     zIndex: 10,
     cursor: 'move',
-    // Ensure standard box model
-    boxSizing: 'border-box' 
+    boxSizing: 'border-box',
+    touchAction: 'none' // Important for mobile
   };
 
   // Grid lines styles (inverse scaled to keep thin lines)
@@ -176,7 +199,11 @@ const CropOverlay: React.FC<CropOverlayProps> = ({
   });
 
   return (
-    <div style={boxStyle} onMouseDown={(e) => handleMouseDown(e, 'move')}>
+    <div 
+        style={boxStyle} 
+        onMouseDown={(e) => handleMouseDown(e, 'move')}
+        onTouchStart={(e) => handleTouchStart(e, 'move')}
+    >
        {/* Grid of Thirds */}
        <div style={gridLineStyle(true, '33.33%')} />
        <div style={gridLineStyle(true, '66.66%')} />
@@ -184,10 +211,22 @@ const CropOverlay: React.FC<CropOverlayProps> = ({
        <div style={gridLineStyle(false, '66.66%')} />
 
        {/* Handles */}
-       <div style={handleStyle(true, true)} onMouseDown={(e) => handleMouseDown(e, 'nw')} />
-       <div style={handleStyle(true, false)} onMouseDown={(e) => handleMouseDown(e, 'ne')} />
-       <div style={handleStyle(false, true)} onMouseDown={(e) => handleMouseDown(e, 'sw')} />
-       <div style={handleStyle(false, false)} onMouseDown={(e) => handleMouseDown(e, 'se')} />
+       <div style={handleStyle(true, true)} 
+            onMouseDown={(e) => handleMouseDown(e, 'nw')} 
+            onTouchStart={(e) => handleTouchStart(e, 'nw')}
+        />
+       <div style={handleStyle(true, false)} 
+            onMouseDown={(e) => handleMouseDown(e, 'ne')} 
+            onTouchStart={(e) => handleTouchStart(e, 'ne')}
+        />
+       <div style={handleStyle(false, true)} 
+            onMouseDown={(e) => handleMouseDown(e, 'sw')} 
+            onTouchStart={(e) => handleTouchStart(e, 'sw')}
+        />
+       <div style={handleStyle(false, false)} 
+            onMouseDown={(e) => handleMouseDown(e, 'se')} 
+            onTouchStart={(e) => handleTouchStart(e, 'se')}
+        />
     </div>
   );
 };
