@@ -11,17 +11,19 @@ const getGeminiClient = () => {
 
 export const analyzeImageWithGemini = async (
   base64Image: string,
-  mimeType: string
+  mimeType: string,
+  language: string = 'en'
 ): Promise<AIAnalysisResult> => {
   const ai = getGeminiClient();
-  
+
   // Clean base64 string if it contains header
-  const cleanBase64 = base64Image.includes('base64,') 
-    ? base64Image.split('base64,')[1] 
+  const cleanBase64 = base64Image.includes('base64,')
+    ? base64Image.split('base64,')[1]
     : base64Image;
 
+  const langInstruction = language === 'zh' ? 'Respond in Chinese (Simplified).' : 'Respond in English.';
   const prompt = `Analyze this image for SEO and file management purposes. 
-  Provide a concise title, a short description (alt text), relevant tags, and a suggested filename (kebab-case, without extension).`;
+  Provide a concise title, a short description (alt text), relevant tags, and a suggested filename (kebab-case, without extension). ${langInstruction}`;
 
   try {
     const response = await ai.models.generateContent({
@@ -46,7 +48,7 @@ export const analyzeImageWithGemini = async (
           properties: {
             title: { type: Type.STRING },
             description: { type: Type.STRING },
-            tags: { 
+            tags: {
               type: Type.ARRAY,
               items: { type: Type.STRING }
             },
@@ -63,6 +65,9 @@ export const analyzeImageWithGemini = async (
     return JSON.parse(text) as AIAnalysisResult;
   } catch (error) {
     console.error("Gemini Analysis Error:", error);
+    if (error instanceof Error) {
+      console.error("Error details:", error.message, error.stack);
+    }
     throw error;
   }
 };

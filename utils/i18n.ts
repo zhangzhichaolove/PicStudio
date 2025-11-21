@@ -31,13 +31,15 @@ export const translations = {
     aiPrompt: "Generate SEO-optimized titles, tags, and descriptions for your processed image.",
     apply: "Apply",
     done: "Done",
+    error: "Analysis failed. Please check your API key or try again.",
+    retry: "Retry",
     ratios: {
-        original: "Reset Crop",
-        custom: "Custom / Free",
-        square: "Square (1:1)",
-        landscape: "Landscape (16:9)",
-        portrait: "Portrait (9:16)",
-        standard: "Standard (4:3)"
+      original: "Reset Crop",
+      custom: "Custom / Free",
+      square: "Square (1:1)",
+      landscape: "Landscape (16:9)",
+      portrait: "Portrait (9:16)",
+      standard: "Standard (4:3)"
     }
   },
   zh: {
@@ -71,13 +73,15 @@ export const translations = {
     aiPrompt: "为您的图片生成 SEO 优化的标题、标签和描述。",
     apply: "应用",
     done: "完成",
+    error: "分析失败。请检查您的 API 密钥或重试。",
+    retry: "重试",
     ratios: {
-        original: "重置裁剪",
-        custom: "自定义 / 自由",
-        square: "方形 (1:1)",
-        landscape: "横向 (16:9)",
-        portrait: "纵向 (9:16)",
-        standard: "标准 (4:3)"
+      original: "重置裁剪",
+      custom: "自定义 / 自由",
+      square: "方形 (1:1)",
+      landscape: "横向 (16:9)",
+      portrait: "纵向 (9:16)",
+      standard: "标准 (4:3)"
     }
   }
 };

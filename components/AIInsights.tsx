@@ -15,10 +15,10 @@ const AIInsights: React.FC<AIInsightsProps> = ({ onAnalyze, status, result, t })
     <div className="bg-surface rounded-xl shadow-lg border border-gray-700 p-5 flex flex-col h-full">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-            <span className="text-xl">✨</span>
-            <h2 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+          <span className="text-xl">✨</span>
+          <h2 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
             {t.aiTitle}
-            </h2>
+          </h2>
         </div>
         <span className="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">Gemini 2.5 Flash</span>
       </div>
@@ -39,8 +39,25 @@ const AIInsights: React.FC<AIInsightsProps> = ({ onAnalyze, status, result, t })
 
       {status === ProcessingStatus.ANALYZING && (
         <div className="flex-1 flex flex-col items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mb-3"></div>
-            <p className="text-sm text-blue-300 animate-pulse">{t.analyzing}</p>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mb-3"></div>
+          <p className="text-sm text-blue-300 animate-pulse">{t.analyzing}</p>
+        </div>
+      )}
+
+      {status === ProcessingStatus.ERROR && (
+        <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
+          <div className="w-12 h-12 bg-red-500/20 rounded-full flex items-center justify-center mb-3">
+            <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <p className="text-sm text-red-300 mb-4">{t.error}</p>
+          <button
+            onClick={onAnalyze}
+            className="bg-red-600 hover:bg-red-500 text-white px-4 py-1.5 rounded-full text-sm font-medium transition-colors"
+          >
+            {t.retry}
+          </button>
         </div>
       )}
 
@@ -52,12 +69,12 @@ const AIInsights: React.FC<AIInsightsProps> = ({ onAnalyze, status, result, t })
           </div>
 
           <div className="bg-gray-900/50 p-3 rounded border border-gray-700/50">
-             <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">{t.filename}</label>
-             <div className="flex items-center gap-2 mt-1">
-                <code className="text-green-400 text-xs bg-green-900/20 px-2 py-1 rounded flex-1 truncate">
-                    {result.suggestedFilename}
-                </code>
-             </div>
+            <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">{t.filename}</label>
+            <div className="flex items-center gap-2 mt-1">
+              <code className="text-green-400 text-xs bg-green-900/20 px-2 py-1 rounded flex-1 truncate">
+                {result.suggestedFilename}
+              </code>
+            </div>
           </div>
 
           <div className="bg-gray-900/50 p-3 rounded border border-gray-700/50">
@@ -68,15 +85,15 @@ const AIInsights: React.FC<AIInsightsProps> = ({ onAnalyze, status, result, t })
           <div>
             <label className="text-[10px] uppercase text-gray-500 font-bold tracking-wider mb-2 block">{t.tags}</label>
             <div className="flex flex-wrap gap-2">
-                {result.tags.map(tag => (
-                    <span key={tag} className="text-xs bg-gray-800 text-blue-300 px-2 py-1 rounded-full border border-gray-700">
-                        #{tag}
-                    </span>
-                ))}
+              {result.tags.map(tag => (
+                <span key={tag} className="text-xs bg-gray-800 text-blue-300 px-2 py-1 rounded-full border border-gray-700">
+                  #{tag}
+                </span>
+              ))}
             </div>
           </div>
-          
-          <button 
+
+          <button
             onClick={onAnalyze}
             className="w-full mt-4 text-xs text-gray-500 hover:text-gray-300 underline"
           >
