@@ -1,9 +1,11 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ImageConfig, ProcessingStatus, AIAnalysisResult } from './types';
 import { readFileAsDataURL, processImage, formatFileSize } from './utils/imageUtils';
 import { analyzeImageWithGemini } from './services/geminiService';
 import ControlPanel from './components/ControlPanel';
 import AIInsights from './components/AIInsights';
+import { translations, Language } from './utils/i18n';
 
 const INITIAL_CONFIG: ImageConfig = {
   rotation: 0,
@@ -23,6 +25,10 @@ export default function App() {
   const [config, setConfig] = useState<ImageConfig>(INITIAL_CONFIG);
   const [origDimensions, setOrigDimensions] = useState({ width: 0, height: 0 });
   
+  // Language State
+  const [lang, setLang] = useState<Language>('en');
+  const t = translations[lang];
+
   // Gemini State
   const [aiStatus, setAiStatus] = useState<ProcessingStatus>(ProcessingStatus.IDLE);
   const [aiResult, setAiResult] = useState<AIAnalysisResult | null>(null);
@@ -30,6 +36,14 @@ export default function App() {
   // Processing Debounce
   const [isProcessing, setIsProcessing] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // View Transform State (Pan & Zoom)
+  const [viewTransform, setViewTransform] = useState({ scale: 1, x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const viewStartRef = useRef({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isFirstLoadRef = useRef(false);
 
   // Load Initial Image Metadata
   useEffect(() => {
@@ -62,6 +76,36 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
+  // Auto Fit on First Load
+  useEffect(() => {
+    if (processedImage && isFirstLoadRef.current && containerRef.current) {
+      const img = new Image();
+      img.onload = () => {
+          if (!containerRef.current) return;
+          const { clientWidth, clientHeight } = containerRef.current;
+          const { naturalWidth, naturalHeight } = img;
+          
+          const padding = 40;
+          const availableWidth = Math.max(100, clientWidth - padding);
+          const availableHeight = Math.max(100, clientHeight - padding);
+          
+          const scaleX = availableWidth / naturalWidth;
+          const scaleY = availableHeight / naturalHeight;
+          
+          // Fit to screen
+          const scale = Math.min(scaleX, scaleY, 1); 
+          
+          setViewTransform({
+              scale: scale,
+              x: 0,
+              y: 0
+          });
+          isFirstLoadRef.current = false;
+      };
+      img.src = processedImage;
+    }
+  }, [processedImage]);
+
   const handleProcess = async (src: string, cfg: ImageConfig) => {
     try {
       const resultDataUrl = await processImage(src, cfg);
@@ -87,6 +131,7 @@ export default function App() {
       setConfig(INITIAL_CONFIG);
       setAiResult(null);
       setAiStatus(ProcessingStatus.IDLE);
+      isFirstLoadRef.current = true;
     }
   };
 
@@ -100,6 +145,7 @@ export default function App() {
         setConfig(INITIAL_CONFIG);
         setAiResult(null);
         setAiStatus(ProcessingStatus.IDLE);
+        isFirstLoadRef.current = true;
     }
   };
 
@@ -130,6 +176,52 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  // --- Pan & Zoom Handlers ---
+
+  const resetView = () => {
+    // Manual reset, just centers 1:1
+    setViewTransform({ scale: 1, x: 0, y: 0 });
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    // Prevent page scroll if possible, though overflow-hidden on body usually handles this
+    const scaleSensitivity = 0.001;
+    const delta = -e.deltaY * scaleSensitivity;
+    const newScale = Math.min(Math.max(0.05, viewTransform.scale + delta), 10);
+    
+    setViewTransform(prev => ({
+      ...prev,
+      scale: newScale
+    }));
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!processedImage) return;
+    e.preventDefault(); // Prevent default drag behavior
+    setIsDragging(true);
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    viewStartRef.current = { x: viewTransform.x, y: viewTransform.y };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    
+    setViewTransform(prev => ({
+      ...prev,
+      x: viewStartRef.current.x + dx,
+      y: viewStartRef.current.y + dy
+    }));
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const zoomIn = () => setViewTransform(prev => ({ ...prev, scale: Math.min(prev.scale + 0.2, 10) }));
+  const zoomOut = () => setViewTransform(prev => ({ ...prev, scale: Math.max(prev.scale - 0.2, 0.05) }));
+
   return (
     <div 
         className="min-h-screen bg-dark text-gray-200 flex flex-col h-screen"
@@ -144,12 +236,28 @@ export default function App() {
                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-white">OptiPic <span className="text-blue-400 font-light">Studio</span></h1>
+          <h1 className="text-xl font-bold tracking-tight text-white">{t.appTitle}</h1>
         </div>
         
-        <div className="flex gap-4">
+        <div className="flex gap-4 items-center">
+           {/* Language Switcher */}
+           <div className="bg-gray-800 rounded flex overflow-hidden border border-gray-600 mr-2">
+             <button 
+               onClick={() => setLang('en')} 
+               className={`px-2 py-1 text-xs font-bold ${lang === 'en' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+             >
+               EN
+             </button>
+             <button 
+               onClick={() => setLang('zh')} 
+               className={`px-2 py-1 text-xs font-bold ${lang === 'zh' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+             >
+               中
+             </button>
+           </div>
+
            <label className="cursor-pointer bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded transition-colors border border-gray-600 text-sm font-medium">
-             Upload Image
+             {t.upload}
              <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
            </label>
            {processedImage && (
@@ -157,7 +265,7 @@ export default function App() {
                onClick={downloadImage}
                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded transition-colors shadow-lg shadow-blue-900/50 text-sm font-bold flex items-center gap-2"
              >
-               Download <span className="opacity-70 font-normal text-xs">({formatFileSize(processedSize)})</span>
+               {t.download} <span className="opacity-70 font-normal text-xs">({formatFileSize(processedSize)})</span>
              </button>
            )}
         </div>
@@ -172,56 +280,95 @@ export default function App() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
              </div>
-             <p className="text-lg font-medium">Drag & drop an image here</p>
-             <p className="text-sm opacity-60">or click Upload in the top right</p>
+             <p className="text-lg font-medium">{t.dragDrop}</p>
+             <p className="text-sm opacity-60">{t.dragDropSub}</p>
           </div>
         ) : (
           <>
             {/* Left Sidebar: Controls */}
-            <div className="w-full md:w-80 lg:w-96 bg-surface/50 border-r border-gray-700 flex flex-col overflow-hidden shrink-0">
-               {/* Tabs for Control vs AI - Mobile only concept, but for now stacked or toggled */}
+            <div className="w-full md:w-80 lg:w-96 bg-surface/50 border-r border-gray-700 flex flex-col overflow-hidden shrink-0 z-20">
                <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
                   <ControlPanel 
                     config={config} 
                     onChange={setConfig} 
                     originalDimensions={origDimensions}
                     onReset={() => setConfig(INITIAL_CONFIG)}
+                    t={t}
                   />
                   
                   <AIInsights 
                     onAnalyze={handleAIAnalysis}
                     status={aiStatus}
                     result={aiResult}
+                    t={t}
                   />
                </div>
             </div>
 
             {/* Center: Preview Stage */}
-            <div className="flex-1 bg-black/40 relative overflow-hidden flex items-center justify-center p-8">
+            <div 
+                ref={containerRef}
+                className="flex-1 bg-black/40 relative overflow-hidden flex items-center justify-center p-0"
+                onWheel={handleWheel}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+                style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+            >
               
               {/* Canvas Pattern Background */}
               <div className="absolute inset-0 opacity-10 pointer-events-none" 
                    style={{
                      backgroundImage: 'radial-gradient(#4b5563 1px, transparent 1px)', 
-                     backgroundSize: '20px 20px'
+                     backgroundSize: '20px 20px',
+                     backgroundPosition: `${viewTransform.x}px ${viewTransform.y}px` 
                    }}>
               </div>
 
               {isProcessing && (
-                 <div className="absolute z-50 bg-black/60 text-white px-4 py-2 rounded-full text-sm flex items-center gap-2 backdrop-blur-md border border-white/10">
+                 <div className="absolute z-50 bg-black/60 text-white px-4 py-2 rounded-full text-sm flex items-center gap-2 backdrop-blur-md border border-white/10 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none">
                     <div className="w-2 h-2 bg-blue-500 rounded-full animate-ping"></div>
                     Processing...
                  </div>
               )}
 
               {processedImage && (
-                <img 
-                  src={processedImage} 
-                  alt="Preview" 
-                  className="max-w-full max-h-full object-contain shadow-2xl border border-gray-800/50 rounded-sm transition-opacity duration-200"
-                  style={{ opacity: isProcessing ? 0.7 : 1 }}
-                />
+                <div 
+                  style={{
+                    transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`,
+                    transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+                    transformOrigin: 'center'
+                  }}
+                  className="will-change-transform"
+                >
+                  <img 
+                    src={processedImage} 
+                    alt="Preview" 
+                    className="max-w-none shadow-2xl border border-gray-800/50 rounded-sm pointer-events-none select-none"
+                    style={{ 
+                      opacity: isProcessing ? 0.7 : 1,
+                    }}
+                  />
+                </div>
               )}
+
+              {/* Floating Zoom Controls */}
+              <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-2 bg-gray-800/90 backdrop-blur border border-gray-700 p-1.5 rounded-full shadow-xl z-30">
+                  <button onClick={zoomOut} className="p-2 hover:bg-gray-700 rounded-full text-gray-300 hover:text-white transition-colors">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" /></svg>
+                  </button>
+                  <span className="text-xs font-medium text-gray-300 w-12 text-center select-none">
+                      {Math.round(viewTransform.scale * 100)}%
+                  </span>
+                  <button onClick={zoomIn} className="p-2 hover:bg-gray-700 rounded-full text-gray-300 hover:text-white transition-colors">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                  </button>
+                  <div className="w-px h-4 bg-gray-600 mx-1"></div>
+                  <button onClick={resetView} className="px-3 py-1 text-xs font-medium hover:bg-gray-700 rounded-full text-gray-300 hover:text-white transition-colors">
+                      {t.reset}
+                  </button>
+              </div>
             </div>
           </>
         )}
