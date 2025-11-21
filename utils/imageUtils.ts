@@ -19,96 +19,102 @@ export const loadImage = (src: string): Promise<HTMLImageElement> => {
   });
 };
 
+export const getTransformedDimensions = (
+  width: number, 
+  height: number, 
+  rotation: number
+) => {
+  const isVertical = rotation === 90 || rotation === 270;
+  return {
+    width: isVertical ? height : width,
+    height: isVertical ? width : height
+  };
+};
+
 export const processImage = async (
   imageSrc: string,
   config: ImageConfig
 ): Promise<string> => {
   const img = await loadImage(imageSrc);
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-
-  if (!ctx) throw new Error('Could not get canvas context');
-
-  // 1. Calculate Dimensions considering Rotation
-  const isVertical = config.rotation === 90 || config.rotation === 270;
+  
+  // --- Pass 1: Create the Intermediate Image (Rotated & Flipped) ---
+  // We draw the full rotated/flipped image onto a canvas first. 
+  // This simplifies the coordinate system for the subsequent crop/resize step.
+  
   const originalWidth = img.naturalWidth;
   const originalHeight = img.naturalHeight;
-
-  // Initial logical dimensions before resizing
-  let logicalWidth = originalWidth;
-  let logicalHeight = originalHeight;
-
-  // 2. Apply Crop (Logic: Center Crop)
-  let sx = 0;
-  let sy = 0;
-  let sWidth = originalWidth;
-  let sHeight = originalHeight;
-
-  if (config.cropRatio) {
-    const currentRatio = originalWidth / originalHeight;
-    if (currentRatio > config.cropRatio) {
-      // Image is wider than target: crop width
-      sWidth = originalHeight * config.cropRatio;
-      sx = (originalWidth - sWidth) / 2;
-    } else {
-      // Image is taller than target: crop height
-      sHeight = originalWidth / config.cropRatio;
-      sy = (originalHeight - sHeight) / 2;
-    }
-    // Update logical dimensions after crop
-    logicalWidth = sWidth;
-    logicalHeight = sHeight;
-  }
-
-  // 3. Determine Final Canvas Size (Resize + Rotate)
-  // If user specified a target size, we scale the logical dimensions to that
-  // Otherwise, use the logical (cropped) dimensions
-  const scaleX = config.targetWidth > 0 ? config.targetWidth / logicalWidth : 1;
-  const scaleY = config.targetHeight > 0 ? config.targetHeight / logicalHeight : 1;
   
-  // Maintain aspect ratio if only one dimension is provided, or use the smallest scale if both provided but aspect ratio locked (simplified here: we trust the config values)
-  // For this implementation, we assume targetWidth/Height matches the cropped aspect ratio or user intent.
+  // Calculate dimensions of the rotated bounding box
+  const { width: intermediateWidth, height: intermediateHeight } = getTransformedDimensions(
+    originalWidth, 
+    originalHeight, 
+    config.rotation
+  );
+
+  const intermediateCanvas = document.createElement('canvas');
+  intermediateCanvas.width = intermediateWidth;
+  intermediateCanvas.height = intermediateHeight;
+  const ictx = intermediateCanvas.getContext('2d');
   
-  let finalWidth = config.targetWidth || logicalWidth;
-  let finalHeight = config.targetHeight || logicalHeight;
+  if (!ictx) throw new Error('Could not get intermediate canvas context');
 
-  // If rotated 90/270, swap final canvas dimensions
-  if (isVertical) {
-    canvas.width = finalHeight;
-    canvas.height = finalWidth;
-  } else {
-    canvas.width = finalWidth;
-    canvas.height = finalHeight;
-  }
-
-  // 4. Draw
-  ctx.save();
-
-  // Move to center of canvas for rotation
-  ctx.translate(canvas.width / 2, canvas.height / 2);
-
-  // Rotate
-  ctx.rotate((config.rotation * Math.PI) / 180);
-
-  // Flip
-  ctx.scale(
+  ictx.save();
+  ictx.translate(intermediateWidth / 2, intermediateHeight / 2);
+  ictx.rotate((config.rotation * Math.PI) / 180);
+  ictx.scale(
     config.flipHorizontal ? -1 : 1,
     config.flipVertical ? -1 : 1
   );
+  // Draw centered
+  ictx.drawImage(img, -originalWidth / 2, -originalHeight / 2);
+  ictx.restore();
 
-  // Draw Image
-  // We draw the cropped portion (sx, sy, sWidth, sHeight)
-  // into the rect (-finalWidth/2, -finalHeight/2, finalWidth, finalHeight)
-  // Note: If rotated, we still draw into the 'unrotated' local coordinate system
-  ctx.drawImage(
-    img,
-    sx, sy, sWidth, sHeight,
-    -finalWidth / 2, -finalHeight / 2, finalWidth, finalHeight
+  // If we only need the intermediate image (e.g. for previewing crop), 
+  // and no crop/resize is defined (or specific flag?), we could stop here.
+  // However, usually this function is called to get the FINAL output.
+  
+  // --- Pass 2: Crop & Resize ---
+  
+  // Determine Source Rect (Crop) in the Intermediate Coordinate System
+  let sx = 0, sy = 0, sWidth = intermediateWidth, sHeight = intermediateHeight;
+
+  if (config.cropRect) {
+    sx = config.cropRect.x;
+    sy = config.cropRect.y;
+    sWidth = config.cropRect.width;
+    sHeight = config.cropRect.height;
+  } else if (config.cropRatio) {
+    // Fallback: Center Crop if ratio provided but no specific rect (legacy support)
+    const currentRatio = intermediateWidth / intermediateHeight;
+    if (currentRatio > config.cropRatio) {
+      sWidth = intermediateHeight * config.cropRatio;
+      sx = (intermediateWidth - sWidth) / 2;
+    } else {
+      sHeight = intermediateWidth / config.cropRatio;
+      sy = (intermediateHeight - sHeight) / 2;
+    }
+  }
+
+  // Determine Destination Size (Resize)
+  // If target dimensions are provided, use them.
+  // Otherwise, use the cropped dimensions.
+  let finalWidth = config.targetWidth > 0 ? config.targetWidth : sWidth;
+  let finalHeight = config.targetHeight > 0 ? config.targetHeight : sHeight;
+
+  const finalCanvas = document.createElement('canvas');
+  finalCanvas.width = finalWidth;
+  finalCanvas.height = finalHeight;
+  const fctx = finalCanvas.getContext('2d');
+  if (!fctx) throw new Error('Could not get final canvas context');
+
+  // Draw from Intermediate -> Final
+  fctx.drawImage(
+    intermediateCanvas,
+    sx, sy, sWidth, sHeight, // Source (Cropped)
+    0, 0, finalWidth, finalHeight // Dest (Resized)
   );
 
-  ctx.restore();
-
-  return canvas.toDataURL(config.format, config.quality);
+  return finalCanvas.toDataURL(config.format, config.quality);
 };
 
 export const formatFileSize = (bytes: number): string => {

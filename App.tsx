@@ -1,15 +1,17 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ImageConfig, ProcessingStatus, AIAnalysisResult } from './types';
-import { readFileAsDataURL, processImage, formatFileSize } from './utils/imageUtils';
+import { ImageConfig, ProcessingStatus, AIAnalysisResult, CropRect } from './types';
+import { readFileAsDataURL, processImage, formatFileSize, getTransformedDimensions } from './utils/imageUtils';
 import { analyzeImageWithGemini } from './services/geminiService';
 import ControlPanel from './components/ControlPanel';
 import AIInsights from './components/AIInsights';
+import CropOverlay from './components/CropOverlay';
 import { translations, Language } from './utils/i18n';
 
 const INITIAL_CONFIG: ImageConfig = {
   rotation: 0,
   cropRatio: null,
+  cropRect: null,
   quality: 0.9,
   targetWidth: 0,
   targetHeight: 0,
@@ -21,10 +23,16 @@ const INITIAL_CONFIG: ImageConfig = {
 export default function App() {
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
+  // Intermediate Image: Rotated/Flipped but NOT cropped. Used for the Crop Editor view.
+  const [intermediateImage, setIntermediateImage] = useState<string | null>(null); 
+  
   const [processedSize, setProcessedSize] = useState<number>(0);
   const [config, setConfig] = useState<ImageConfig>(INITIAL_CONFIG);
   const [origDimensions, setOrigDimensions] = useState({ width: 0, height: 0 });
   
+  // Crop State
+  const [isCropping, setIsCropping] = useState(false);
+
   // Language State
   const [lang, setLang] = useState<Language>('en');
   const t = translations[lang];
@@ -52,6 +60,8 @@ export default function App() {
       img.src = originalImage;
       img.onload = () => {
         setOrigDimensions({ width: img.naturalWidth, height: img.naturalHeight });
+        // Generate initial intermediate image
+        updateIntermediateImage(originalImage, config);
         // Trigger initial process
         handleProcess(originalImage, config);
       };
@@ -59,26 +69,59 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [originalImage]);
 
+  // Update Intermediate Image when Rotation/Flip changes
+  const updateIntermediateImage = async (src: string, cfg: ImageConfig) => {
+    try {
+        // Generate an image that is rotated/flipped but NOT cropped/resized
+        const intermediateUrl = await processImage(src, {
+            ...cfg,
+            cropRect: null,
+            cropRatio: null,
+            targetWidth: 0,
+            targetHeight: 0
+        });
+        setIntermediateImage(intermediateUrl);
+    } catch (e) {
+        console.error("Failed to update intermediate image", e);
+    }
+  };
+
+  // Effect: When rotation/flip changes, update intermediate and clear crop
+  useEffect(() => {
+      if (!originalImage) return;
+      // Check if transform changed (shallow comparison or just always update if rotation changed)
+      // For simplicity, we update intermediate on specific keys
+      updateIntermediateImage(originalImage, config);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.rotation, config.flipHorizontal, config.flipVertical, originalImage]);
+
   // Handle Configuration Changes with Debounce
   useEffect(() => {
     if (!originalImage) return;
 
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     
-    setIsProcessing(true);
-    timeoutRef.current = setTimeout(() => {
-      handleProcess(originalImage, config);
-    }, 300); // 300ms debounce for smooth sliding
+    // Don't fully re-process if we are just dragging the crop box (performance)
+    // But we DO want to see the result? 
+    // Strategy: If isCropping, we show the Intermediate Image + Overlay. We don't need to re-process 'processedImage' constantly.
+    // We only re-process processedImage when NOT isCropping (or when user clicks Apply).
+    
+    if (!isCropping) {
+        setIsProcessing(true);
+        timeoutRef.current = setTimeout(() => {
+          handleProcess(originalImage, config);
+        }, 300);
+    }
 
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config]);
+  }, [config, isCropping]); // Re-run when isCropping toggles to false
 
   // Auto Fit on First Load
   useEffect(() => {
-    if (processedImage && isFirstLoadRef.current && containerRef.current) {
+    if (intermediateImage && isFirstLoadRef.current && containerRef.current) {
       const img = new Image();
       img.onload = () => {
           if (!containerRef.current) return;
@@ -97,14 +140,14 @@ export default function App() {
           
           setViewTransform({
               scale: scale,
-              x: 0,
-              y: 0
+              x: (clientWidth - naturalWidth * scale) / 2, // Center it
+              y: (clientHeight - naturalHeight * scale) / 2
           });
           isFirstLoadRef.current = false;
       };
-      img.src = processedImage;
+      img.src = intermediateImage; // Base fit on the rotated full image
     }
-  }, [processedImage]);
+  }, [intermediateImage]);
 
   const handleProcess = async (src: string, cfg: ImageConfig) => {
     try {
@@ -131,6 +174,7 @@ export default function App() {
       setConfig(INITIAL_CONFIG);
       setAiResult(null);
       setAiStatus(ProcessingStatus.IDLE);
+      setIsCropping(false);
       isFirstLoadRef.current = true;
     }
   };
@@ -145,6 +189,7 @@ export default function App() {
         setConfig(INITIAL_CONFIG);
         setAiResult(null);
         setAiStatus(ProcessingStatus.IDLE);
+        setIsCropping(false);
         isFirstLoadRef.current = true;
     }
   };
@@ -153,7 +198,7 @@ export default function App() {
     if (!processedImage) return;
     setAiStatus(ProcessingStatus.ANALYZING);
     try {
-      // Use the processed image for analysis so the AI sees what the user cropped/rotated
+      // Use the processed image for analysis
       const result = await analyzeImageWithGemini(processedImage, config.format);
       setAiResult(result);
       setAiStatus(ProcessingStatus.SUCCESS);
@@ -176,28 +221,118 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  // --- Crop Logic ---
+
+  const handleToggleCrop = (enable: boolean, ratio?: number | null) => {
+    if (enable) {
+        // Entering Crop Mode
+        setIsCropping(true);
+        
+        // If ratio is provided (or we already have one), calculate a new default cropRect if none exists
+        const targetRatio = ratio !== undefined ? ratio : config.cropRatio;
+        
+        // Calculate dimensions of the intermediate image (Rotated/Flipped)
+        const { width, height } = getTransformedDimensions(
+            origDimensions.width, 
+            origDimensions.height, 
+            config.rotation
+        );
+        
+        // If we don't have a rect, or if the user switched ratio, re-calculate center crop
+        if (!config.cropRect || ratio !== undefined) {
+             let newRect: CropRect;
+             
+             if (targetRatio) {
+                 // Center Crop based on ratio
+                 let w = width;
+                 let h = height;
+                 if (width / height > targetRatio) {
+                     w = height * targetRatio;
+                 } else {
+                     h = width / targetRatio;
+                 }
+                 newRect = {
+                     x: (width - w) / 2,
+                     y: (height - h) / 2,
+                     width: w,
+                     height: h
+                 };
+             } else {
+                 // Free crop: Start with 90% size centered
+                 newRect = {
+                     x: width * 0.05,
+                     y: height * 0.05,
+                     width: width * 0.9,
+                     height: height * 0.9
+                 };
+             }
+             setConfig(prev => ({ ...prev, cropRatio: targetRatio || null, cropRect: newRect }));
+        } else {
+            // Just enable mode with existing rect
+             setConfig(prev => ({ ...prev, cropRatio: targetRatio || null }));
+        }
+
+    } else {
+        // Exiting Crop Mode (Apply)
+        setIsCropping(false);
+    }
+  };
+
   // --- Pan & Zoom Handlers ---
 
   const resetView = () => {
-    // Manual reset, just centers 1:1
-    setViewTransform({ scale: 1, x: 0, y: 0 });
+      if (intermediateImage && containerRef.current) {
+           const { width, height } = getTransformedDimensions(origDimensions.width, origDimensions.height, config.rotation);
+           const cw = containerRef.current.clientWidth;
+           const ch = containerRef.current.clientHeight;
+           const padding = 40;
+           
+           const scale = Math.min((cw - padding) / width, (ch - padding) / height);
+           setViewTransform({
+               scale: scale,
+               x: (cw - width * scale) / 2,
+               y: (ch - height * scale) / 2
+           });
+      }
   };
 
   const handleWheel = (e: React.WheelEvent) => {
-    // Prevent page scroll if possible, though overflow-hidden on body usually handles this
-    const scaleSensitivity = 0.001;
-    const delta = -e.deltaY * scaleSensitivity;
-    const newScale = Math.min(Math.max(0.05, viewTransform.scale + delta), 10);
+    if (!containerRef.current) return;
+    e.preventDefault();
     
-    setViewTransform(prev => ({
-      ...prev,
-      scale: newScale
-    }));
+    const scaleSensitivity = -0.001; // Inverted for standard scroll-to-zoom
+    const delta = e.deltaY * scaleSensitivity;
+    const currentScale = viewTransform.scale;
+    const newScale = Math.min(Math.max(0.05, currentScale + delta), 10);
+
+    // Calculate mouse position relative to the container
+    const rect = containerRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    // Calculate the point on the image (content coordinate system) that is currently under the mouse
+    // Formula: mouse = translation + point * scale
+    // Therefore: point = (mouse - translation) / scale
+    const contentX = (mouseX - viewTransform.x) / currentScale;
+    const contentY = (mouseY - viewTransform.y) / currentScale;
+
+    // Calculate new translation such that the content point remains under the mouse at the new scale
+    // newTranslation = mouse - point * newScale
+    const newX = mouseX - (contentX * newScale);
+    const newY = mouseY - (contentY * newScale);
+
+    setViewTransform({
+      scale: newScale,
+      x: newX,
+      y: newY
+    });
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (!processedImage) return;
-    e.preventDefault(); // Prevent default drag behavior
+    if (!processedImage && !intermediateImage) return;
+    // If interacting with Crop Overlay handles, don't pan (handled by stopPropagation in overlay)
+    
+    e.preventDefault(); 
     setIsDragging(true);
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     viewStartRef.current = { x: viewTransform.x, y: viewTransform.y };
@@ -219,8 +354,45 @@ export default function App() {
     setIsDragging(false);
   };
 
-  const zoomIn = () => setViewTransform(prev => ({ ...prev, scale: Math.min(prev.scale + 0.2, 10) }));
-  const zoomOut = () => setViewTransform(prev => ({ ...prev, scale: Math.max(prev.scale - 0.2, 0.05) }));
+  const zoomIn = () => {
+      if (!containerRef.current) return;
+      // Zoom into center
+      const rect = containerRef.current.getBoundingClientRect();
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+      
+      const currentScale = viewTransform.scale;
+      const newScale = Math.min(currentScale + 0.2, 10);
+      
+      const contentX = (centerX - viewTransform.x) / currentScale;
+      const contentY = (centerY - viewTransform.y) / currentScale;
+      
+      const newX = centerX - (contentX * newScale);
+      const newY = centerY - (contentY * newScale);
+      
+      setViewTransform({ scale: newScale, x: newX, y: newY });
+  };
+
+  const zoomOut = () => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+      
+      const currentScale = viewTransform.scale;
+      const newScale = Math.max(currentScale - 0.2, 0.05);
+      
+      const contentX = (centerX - viewTransform.x) / currentScale;
+      const contentY = (centerY - viewTransform.y) / currentScale;
+      
+      const newX = centerX - (contentX * newScale);
+      const newY = centerY - (contentY * newScale);
+      
+      setViewTransform({ scale: newScale, x: newX, y: newY });
+  };
+
+  // Calculate dimensions for CropOverlay
+  const transformedDims = getTransformedDimensions(origDimensions.width, origDimensions.height, config.rotation);
 
   return (
     <div 
@@ -240,7 +412,6 @@ export default function App() {
         </div>
         
         <div className="flex gap-4 items-center">
-           {/* Language Switcher */}
            <div className="bg-gray-800 rounded flex overflow-hidden border border-gray-600 mr-2">
              <button 
                onClick={() => setLang('en')} 
@@ -292,16 +463,24 @@ export default function App() {
                     config={config} 
                     onChange={setConfig} 
                     originalDimensions={origDimensions}
-                    onReset={() => setConfig(INITIAL_CONFIG)}
+                    onReset={() => {
+                        setConfig(INITIAL_CONFIG);
+                        setIsCropping(false);
+                        resetView();
+                    }}
                     t={t}
+                    isCropping={isCropping}
+                    onToggleCrop={handleToggleCrop}
                   />
                   
-                  <AIInsights 
-                    onAnalyze={handleAIAnalysis}
-                    status={aiStatus}
-                    result={aiResult}
-                    t={t}
-                  />
+                  {!isCropping && (
+                      <AIInsights 
+                        onAnalyze={handleAIAnalysis}
+                        status={aiStatus}
+                        result={aiResult}
+                        t={t}
+                      />
+                  )}
                </div>
             </div>
 
@@ -326,31 +505,66 @@ export default function App() {
                    }}>
               </div>
 
-              {isProcessing && (
+              {isProcessing && !isCropping && (
                  <div className="absolute z-50 bg-black/60 text-white px-4 py-2 rounded-full text-sm flex items-center gap-2 backdrop-blur-md border border-white/10 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none">
                     <div className="w-2 h-2 bg-blue-500 rounded-full animate-ping"></div>
                     Processing...
                  </div>
               )}
 
-              {processedImage && (
-                <div 
+              <div 
                   style={{
                     transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`,
                     transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-                    transformOrigin: 'center'
+                    transformOrigin: 'top left',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
                   }}
                   className="will-change-transform"
-                >
-                  <img 
-                    src={processedImage} 
-                    alt="Preview" 
-                    className="max-w-none shadow-2xl border border-gray-800/50 rounded-sm pointer-events-none select-none"
-                    style={{ 
-                      opacity: isProcessing ? 0.7 : 1,
-                    }}
-                  />
-                </div>
+              >
+                  {/* 
+                      DISPLAY LOGIC:
+                      If isCropping: Show Intermediate Image (Rotated/Flipped) + Crop Overlay
+                      Else: Show Final Processed Image 
+                  */}
+                  
+                  {isCropping && intermediateImage ? (
+                      <div className="relative">
+                          <img 
+                            src={intermediateImage} 
+                            alt="Crop Preview" 
+                            className="max-w-none shadow-2xl border border-gray-800/50 rounded-sm pointer-events-none select-none"
+                            draggable={false}
+                          />
+                          {config.cropRect && (
+                             <CropOverlay 
+                                rect={config.cropRect}
+                                onChange={(newRect) => setConfig(prev => ({ ...prev, cropRect: newRect }))}
+                                imageDimensions={transformedDims}
+                                viewTransform={viewTransform}
+                                aspectRatio={config.cropRatio}
+                             />
+                          )}
+                      </div>
+                  ) : (
+                      processedImage && (
+                        <img 
+                            src={processedImage} 
+                            alt="Preview" 
+                            className="max-w-none shadow-2xl border border-gray-800/50 rounded-sm pointer-events-none select-none"
+                            style={{ opacity: isProcessing ? 0.7 : 1 }}
+                            draggable={false}
+                        />
+                      )
+                  )}
+              </div>
+              
+              {/* Overlay instructions for crop mode */}
+              {isCropping && (
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-xs px-4 py-2 rounded-full shadow-lg pointer-events-none z-40 animate-pulse">
+                      {t.crop} Mode Active - Adjust Box
+                  </div>
               )}
 
               {/* Floating Zoom Controls */}
