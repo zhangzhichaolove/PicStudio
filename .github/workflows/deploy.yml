@@ -8,6 +8,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    permissions:
+      id-token: write   # 允许拿到 OIDC 令牌
+      contents: read    # 允许检出仓库
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
