@@ -9,8 +9,8 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write   # 允许拿到 OIDC 令牌
-      contents: read    # 允许检出仓库
+      id-token: write   # åè®¸æ¿å° OIDC ä»¤ç
+      contents: read    # åè®¸æ£åºä»åº
 
     steps:
       - name: Checkout repo
@@ -30,6 +30,6 @@ jobs:
       - name: Upload to Deno Deploy
         uses: denoland/deployctl@v1
         with:
-          project: picstudio # 替换为你的 Deno Deploy 项目名
+          project: picstudio # æ¿æ¢ä¸ºä½ ç Deno Deploy é¡¹ç®å
           entrypoint: serve.ts
           root: .
