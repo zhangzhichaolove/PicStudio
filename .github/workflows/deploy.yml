@@ -30,6 +30,6 @@ jobs:
       - name: Upload to Deno Deploy
         uses: denoland/deployctl@v1
         with:
-          project: PicStudio # 替换为你的 Deno Deploy 项目名
+          project: zhangzhichaolove/PicStudio # 替换为你的 Deno Deploy 项目名
           entrypoint: serve.ts
           root: .
